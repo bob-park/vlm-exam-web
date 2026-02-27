@@ -1,0 +1,5 @@
+.git
+.next
+.idea
+node_modules
+*.log

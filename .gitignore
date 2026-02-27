@@ -21,21 +21,45 @@
 /build
 
 # misc
-.DS_Store
+.DS_Store*
 *.pem
+Thumbs.db
+ehthumbs.db
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
+# logs
+*.log*
+logs
 
-# env files (can opt-in for committing if needed)
+# runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# env files
 .env*
+!.env.example
 
 # vercel
 .vercel
+*.tgz
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# IDEs and editors
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store?
+ehthumbs.db
+Icon?
+
+# temporary files
+*.tmp
+*.temp

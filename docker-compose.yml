@@ -1,0 +1,8 @@
+services:
+  web:
+    image: ghcr.io/bob-park/vlm-exam-web
+    build:
+      dockerfile: ./Dockerfile
+      x-bake:
+        platforms:
+          - linux/amd64
