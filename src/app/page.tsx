@@ -23,27 +23,45 @@ function formatDuration(seconds: number | null | undefined) {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "—";
+  return date.toLocaleString("ko-KR");
+}
+
+function formatContentType(contentType: string | null | undefined) {
+  if (!contentType) return "—";
+  const [, format] = contentType.split("/");
+  return (format ?? contentType).toUpperCase();
+}
+
+function formatProcessingDuration(
+  startedAt: string | null | undefined,
+  finishedAt: string | null | undefined
+) {
+  if (!startedAt || !finishedAt) return "—";
+  const started = new Date(startedAt).getTime();
+  const finished = new Date(finishedAt).getTime();
+  if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) {
+    return "—";
+  }
+  const seconds = Math.floor((finished - started) / 1000);
+  return formatDuration(seconds);
+}
+
+function getVideoCatalogImageId(video: VideoOut) {
+  if (typeof video.first_catalog_image_id === "number") {
+    return video.first_catalog_image_id;
+  }
+  if (typeof video.catalog_image_id === "number") {
+    return video.catalog_image_id;
+  }
+  return null;
+}
+
 function getResultTime(result: SearchResult) {
-  if (typeof result.position_seconds === "number") return result.position_seconds;
-  if (typeof result.position === "number") return result.position;
-  if (typeof result.timestamp === "number") return result.timestamp;
   if (typeof result.seconds === "number") return result.seconds;
-  if (typeof result.position_seconds === "string") {
-    const value = Number(result.position_seconds);
-    return Number.isFinite(value) ? value : null;
-  }
-  if (typeof result.position === "string") {
-    const value = Number(result.position);
-    return Number.isFinite(value) ? value : null;
-  }
-  if (typeof result.timestamp === "string") {
-    const value = Number(result.timestamp);
-    return Number.isFinite(value) ? value : null;
-  }
-  if (typeof result.seconds === "string") {
-    const value = Number(result.seconds);
-    return Number.isFinite(value) ? value : null;
-  }
   return null;
 }
 
@@ -93,8 +111,14 @@ async function previewFromBlob(blob: Blob) {
 export default function Home() {
   const router = useRouter();
   const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"image" | "text">("image");
+  const [activeTab, setActiveTab] = useState<"image" | "text" | "videos">(
+    "image"
+  );
   const [textQuery, setTextQuery] = useState("");
+  const [videoQueryInput, setVideoQueryInput] = useState("");
+  const [videoQuery, setVideoQuery] = useState<string | null>(null);
+  const [videoPage, setVideoPage] = useState(1);
+  const [videoSize, setVideoSize] = useState(20);
 
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -107,7 +131,13 @@ export default function Home() {
 
   const videosQuery = useQuery({
     queryKey: ["videos"],
-    queryFn: () => listVideos(null),
+    queryFn: () => listVideos(null, 1, 100),
+  });
+
+  const videoListQuery = useQuery({
+    queryKey: ["video-list", videoQuery, videoPage, videoSize],
+    queryFn: () => listVideos(videoQuery, videoPage, videoSize),
+    placeholderData: (previousData) => previousData,
   });
 
   const videoMap = useMemo(() => {
@@ -123,6 +153,7 @@ export default function Home() {
     onSuccess: () => {
       setIsUploadOpen(false);
       void videosQuery.refetch();
+      void videoListQuery.refetch();
     },
     onError: (error) => {
       console.error("[uploadVideo] mutation error", error);
@@ -222,6 +253,18 @@ export default function Home() {
     await textSearchMutation.mutateAsync(textQuery.trim());
   };
 
+  const handleVideoSearch = () => {
+    const value = videoQueryInput.trim();
+    setVideoPage(1);
+    setVideoQuery(value.length > 0 ? value : null);
+  };
+
+  const handleVideoPageChange = (nextPage: number) => {
+    const totalPages = videoListQuery.data?.total_pages ?? 1;
+    const page = Math.min(Math.max(1, nextPage), totalPages);
+    setVideoPage(page);
+  };
+
   const handleResultClick = (result: SearchResult) => {
     const time = getResultTime(result);
     const params = new URLSearchParams();
@@ -301,6 +344,17 @@ export default function Home() {
                 }`}
               >
                 자연어 검색
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("videos")}
+                className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                  activeTab === "videos"
+                    ? "bg-slate-900 text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                영상 목록
               </button>
             </div>
 
@@ -426,7 +480,7 @@ export default function Home() {
                   </div>
                 )}
               </div>
-            ) : (
+            ) : activeTab === "text" ? (
               <div className="mt-6 grid gap-4">
                 <label className="text-xs font-semibold text-slate-600">
                   자연어 입력
@@ -450,61 +504,197 @@ export default function Home() {
                   <p className="text-xs text-slate-500">텍스트 검색 중...</p>
                 )}
               </div>
+            ) : (
+              <div className="mt-6 grid gap-4">
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="flex min-w-[240px] flex-1 flex-col gap-2 text-xs font-semibold text-slate-600">
+                    영상 검색어
+                    <input
+                      value={videoQueryInput}
+                      onChange={(event) => setVideoQueryInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          handleVideoSearch();
+                        }
+                      }}
+                      placeholder="파일명 검색"
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-400"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-2 text-xs font-semibold text-slate-600">
+                    페이지 크기
+                    <select
+                      value={videoSize}
+                      onChange={(event) => {
+                        setVideoSize(Number(event.target.value));
+                        setVideoPage(1);
+                      }}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-400"
+                    >
+                      <option value={10}>10</option>
+                      <option value={20}>20</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleVideoSearch}
+                    className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white"
+                  >
+                    조회
+                  </button>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-slate-800">
+                      영상 목록
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      총 {videoListQuery.data?.total ?? 0}건 · {videoPage}/
+                      {videoListQuery.data?.total_pages ?? 1} 페이지
+                    </p>
+                  </div>
+
+                  <div className="mt-4 grid gap-3">
+                    {videoListQuery.isPending && (
+                      <p className="text-xs text-slate-500">
+                        영상 목록을 불러오는 중...
+                      </p>
+                    )}
+                    {!videoListQuery.isPending &&
+                      (videoListQuery.data?.videos.length ?? 0) === 0 && (
+                        <p className="text-xs text-slate-500">
+                          조회된 영상이 없습니다.
+                        </p>
+                      )}
+                    {videoListQuery.data?.videos.map((video) => (
+                      <button
+                        key={video.id}
+                        type="button"
+                        onClick={() => router.push(`/videos/${video.id}`)}
+                        className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white lg:grid-cols-[200px_1fr]"
+                      >
+                        <div className="relative h-28 overflow-hidden rounded-xl bg-slate-200">
+                          {getVideoCatalogImageId(video) !== null ? (
+                            <Image
+                              src={getThumbnailUrl(getVideoCatalogImageId(video)!)}
+                              alt={`${video.filename} thumbnail`}
+                              fill
+                              unoptimized
+                              className="object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                              썸네일 없음
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="min-w-0 grid gap-2 text-xs text-slate-700 md:grid-cols-2">
+                          <p className="truncate text-sm font-semibold text-slate-800">
+                            {video.filename}
+                          </p>
+                          <p>상태: {video.status}</p>
+                          <p>영상 포맷: {formatContentType(video.content_type)}</p>
+                          <p>영상 길이: {formatDuration(video.duration)}</p>
+                          <p>
+                            작업 소요시간:{" "}
+                            {formatProcessingDuration(
+                              video.processing_started_at,
+                              video.processing_finished_at
+                            )}
+                          </p>
+                          <p>
+                            해상도:{" "}
+                            {video.width && video.height
+                              ? `${video.width}x${video.height}`
+                              : "—"}
+                          </p>
+                          <p>등록일: {formatDateTime(video.created_at)}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="mt-5 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleVideoPageChange(videoPage - 1)}
+                      disabled={videoPage <= 1}
+                      className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      이전
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleVideoPageChange(videoPage + 1)}
+                      disabled={videoPage >= (videoListQuery.data?.total_pages ?? 1)}
+                      className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      다음
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
 
-            <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-slate-800">
-                  검색 결과
-                </h3>
-                <p className="text-xs text-slate-500">
-                  {searchResults ? searchResults.length : 0}건
-                </p>
-              </div>
-              <div className="mt-4 grid gap-4">
-                {!searchResults && (
+            {activeTab !== "videos" && (
+              <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-800">
+                    검색 결과
+                  </h3>
                   <p className="text-xs text-slate-500">
-                    검색을 수행하면 결과가 여기에 표시됩니다.
+                    {searchResults ? searchResults.length : 0}건
                   </p>
-                )}
-                {searchResults?.map((result) => {
-                  const video = videoMap.get(result.video_id);
-                  return (
-                    <button
-                      key={`${result.video_id}-${result.catalog_image_id}`}
-                      type="button"
-                      onClick={() => handleResultClick(result)}
-                      className="flex flex-wrap gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
-                    >
-                      <div className="relative h-24 w-40 overflow-hidden rounded-xl bg-slate-200">
-                        <Image
-                          src={getThumbnailUrl(result.catalog_image_id)}
-                          alt="thumbnail"
-                          fill
-                          unoptimized
-                          className="object-cover"
-                        />
-                      </div>
-                      <div className="flex-1 text-xs text-slate-600">
-                        <p className="text-sm font-semibold text-slate-800">
-                          {renderVideoMeta(video)}
-                        </p>
-                        <p className="mt-1">
-                          재생 위치:{" "}
-                          {getResultTime(result) !== null
-                            ? `${getResultTime(result)}s`
-                            : "정보 없음"}
-                        </p>
-                        <p className="mt-1">
-                          설명: {result.caption_ko ?? "설명 없음"}
-                        </p>
-                        <p className="mt-1">점수: {result.score.toFixed(3)}</p>
-                      </div>
-                    </button>
-                  );
-                })}
+                </div>
+                <div className="mt-4 grid gap-4">
+                  {!searchResults && (
+                    <p className="text-xs text-slate-500">
+                      검색을 수행하면 결과가 여기에 표시됩니다.
+                    </p>
+                  )}
+                  {searchResults?.map((result) => {
+                    const video = videoMap.get(result.video_id);
+                    return (
+                      <button
+                        key={`${result.video_id}-${result.catalog_image_id}`}
+                        type="button"
+                        onClick={() => handleResultClick(result)}
+                        className="flex flex-wrap gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
+                      >
+                        <div className="relative h-24 w-40 overflow-hidden rounded-xl bg-slate-200">
+                          <Image
+                            src={getThumbnailUrl(result.catalog_image_id)}
+                            alt="thumbnail"
+                            fill
+                            unoptimized
+                            className="object-cover"
+                          />
+                        </div>
+                        <div className="flex-1 text-xs text-slate-600">
+                          <p className="text-sm font-semibold text-slate-800">
+                            {renderVideoMeta(video)}
+                          </p>
+                          <p className="mt-1">
+                            재생 위치:{" "}
+                            {getResultTime(result) !== null
+                              ? `${getResultTime(result)}s`
+                              : "정보 없음"}
+                          </p>
+                          <p className="mt-1">
+                            설명: {result.caption_en ?? "설명 없음"}
+                          </p>
+                          <p className="mt-1">점수: {result.score.toFixed(3)}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
         </section>

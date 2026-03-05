@@ -7,22 +7,32 @@ export type VideoOut = {
   height: number | null;
   status: string;
   error_message: string | null;
+  processing_started_at: string | null;
+  processing_finished_at: string | null;
   created_at: string;
+  first_catalog_image_id?: number | null;
+  catalog_image_id?: number | null;
 };
 
 export type VideoSearchResponse = {
   videos: VideoOut[];
+  total: number;
+  page: number;
+  size: number;
+  total_pages: number;
 };
 
 export type SearchResult = {
   catalog_image_id: number;
   video_id: number;
-  caption_ko: string | null;
+  caption_en: string | null;
   score: number;
-  position_seconds?: number | null;
-  position?: number | null;
-  timestamp?: number | null;
-  seconds?: number | string | null;
+  seconds?: number | null;
+};
+
+export type TextSearchRequest = {
+  text: string;
+  top_k?: number | null;
 };
 
 export type TextSearchResponse = {

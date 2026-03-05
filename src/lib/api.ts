@@ -2,6 +2,7 @@ import ky from "ky";
 import {
   FaceDetectResponse,
   FaceSearchResponse,
+  TextSearchRequest,
   TextSearchResponse,
   VideoOut,
   VideoSearchResponse,
@@ -21,10 +22,19 @@ export function getThumbnailUrl(catalogId: number) {
   return `/api/catalogs/${catalogId}/thumbnail`;
 }
 
-export async function listVideos(query?: string | null) {
+export async function listVideos(
+  query?: string | null,
+  page?: number,
+  size?: number
+) {
+  const searchParams: Record<string, string> = {};
+  if (query) searchParams.query = query;
+  if (typeof page === "number") searchParams.page = String(page);
+  if (typeof size === "number") searchParams.size = String(size);
+
   return api
     .get("videos", {
-      searchParams: query ? { query } : undefined,
+      searchParams: Object.keys(searchParams).length > 0 ? searchParams : undefined,
       cache: "no-store",
     })
     .json<VideoSearchResponse>();
@@ -74,12 +84,14 @@ export async function searchByFace(file: File) {
 }
 
 export async function searchByText(text: string, topK?: number | null) {
+  const payload: TextSearchRequest = {
+    text,
+    top_k: topK ?? null,
+  };
+
   return api
     .post("search/text", {
-      json: {
-        text,
-        top_k: topK ?? null,
-      },
+      json: payload,
     })
     .json<TextSearchResponse>();
 }
