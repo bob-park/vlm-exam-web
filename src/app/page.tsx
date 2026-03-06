@@ -1,14 +1,13 @@
 "use client";
 
+import { detectFaces, listVideos, searchByFace, searchByText, uploadVideo } from "@/lib/api";
 import {
-  detectFaces,
-  getThumbnailUrl,
-  listVideos,
-  searchByFace,
-  searchByText,
-  uploadVideo,
-} from "@/lib/api";
-import { FaceDetectResponse, SearchResult, VideoOut } from "@/lib/types";
+  FaceBox,
+  FaceSearchItem,
+  TextSearchItem,
+  VideoItem,
+  VideoSummary,
+} from "@/lib/types";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -17,57 +16,26 @@ import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from "react";
 type ImageSize = { width: number; height: number };
 
 function formatDuration(seconds: number | null | undefined) {
-  if (!seconds && seconds !== 0) return "—";
+  if (!seconds && seconds !== 0) return "-";
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
 function formatDateTime(value: string | null | undefined) {
-  if (!value) return "—";
+  if (!value) return "-";
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "—";
+  if (!Number.isFinite(date.getTime())) return "-";
   return date.toLocaleString("ko-KR");
 }
 
-function formatContentType(contentType: string | null | undefined) {
-  if (!contentType) return "—";
-  const [, format] = contentType.split("/");
-  return (format ?? contentType).toUpperCase();
+function formatRange(startSeconds: number, endSeconds: number) {
+  return `${startSeconds.toFixed(1)}s ~ ${endSeconds.toFixed(1)}s`;
 }
 
-function formatProcessingDuration(
-  startedAt: string | null | undefined,
-  finishedAt: string | null | undefined
-) {
-  if (!startedAt || !finishedAt) return "—";
-  const started = new Date(startedAt).getTime();
-  const finished = new Date(finishedAt).getTime();
-  if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) {
-    return "—";
-  }
-  const seconds = Math.floor((finished - started) / 1000);
-  return formatDuration(seconds);
-}
-
-function getVideoCatalogImageId(video: VideoOut) {
-  if (typeof video.first_catalog_image_id === "number") {
-    return video.first_catalog_image_id;
-  }
-  if (typeof video.catalog_image_id === "number") {
-    return video.catalog_image_id;
-  }
-  return null;
-}
-
-function getResultTime(result: SearchResult) {
-  if (typeof result.seconds === "number") return result.seconds;
-  return null;
-}
-
-async function cropToBlob(file: File, bbox: number[]) {
+async function cropToBlob(file: File, face: FaceBox) {
   const image = await createImageBitmap(file);
-  const [x1, y1, x2, y2] = bbox;
+  const { x1, y1, x2, y2 } = face;
   const scale = 2.0;
   const rawWidth = Math.max(1, x2 - x1);
   const rawHeight = Math.max(1, y2 - y1);
@@ -111,42 +79,41 @@ async function previewFromBlob(blob: Blob) {
 export default function Home() {
   const router = useRouter();
   const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"image" | "text" | "videos">(
-    "image"
-  );
+  const [activeTab, setActiveTab] = useState<"image" | "text" | "videos">("image");
+
   const [textQuery, setTextQuery] = useState("");
-  const [videoQueryInput, setVideoQueryInput] = useState("");
-  const [videoQuery, setVideoQuery] = useState<string | null>(null);
+
   const [videoPage, setVideoPage] = useState(1);
   const [videoSize, setVideoSize] = useState(20);
 
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageSize, setImageSize] = useState<ImageSize | null>(null);
-  const [bboxes, setBboxes] = useState<number[][]>([]);
+  const [faces, setFaces] = useState<FaceBox[]>([]);
   const [facePreviews, setFacePreviews] = useState<string[]>([]);
   const [selectedFaceIndex, setSelectedFaceIndex] = useState<number | null>(null);
 
-  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  const [textResults, setTextResults] = useState<TextSearchItem[] | null>(null);
+  const [faceResults, setFaceResults] = useState<FaceSearchItem[] | null>(null);
 
   const videosQuery = useQuery({
     queryKey: ["videos"],
-    queryFn: () => listVideos(null, 1, 100),
+    queryFn: () => listVideos(1, 100),
   });
 
   const videoListQuery = useQuery({
-    queryKey: ["video-list", videoQuery, videoPage, videoSize],
-    queryFn: () => listVideos(videoQuery, videoPage, videoSize),
+    queryKey: ["video-list", videoPage, videoSize],
+    queryFn: () => listVideos(videoPage, videoSize),
     placeholderData: (previousData) => previousData,
   });
 
   const videoMap = useMemo(() => {
-    const map = new Map<number, VideoOut>();
-    for (const video of videosQuery.data?.videos ?? []) {
+    const map = new Map<string, VideoItem>();
+    for (const video of videosQuery.data?.items ?? []) {
       map.set(video.id, video);
     }
     return map;
-  }, [videosQuery.data?.videos]);
+  }, [videosQuery.data?.items]);
 
   const uploadMutation = useMutation({
     mutationFn: uploadVideo,
@@ -155,45 +122,43 @@ export default function Home() {
       void videosQuery.refetch();
       void videoListQuery.refetch();
     },
-    onError: (error) => {
-      console.error("[uploadVideo] mutation error", error);
-    },
   });
 
   const detectMutation = useMutation({
     mutationFn: detectFaces,
-    onSuccess: (data: FaceDetectResponse) => {
-      setBboxes(data.bboxes ?? []);
+    onSuccess: (data) => {
+      setFaces(data.faces ?? []);
       setSelectedFaceIndex(null);
-      setSearchResults(null);
+      setFacePreviews([]);
+      setFaceResults(null);
+      setTextResults(null);
     },
   });
 
   const faceSearchMutation = useMutation({
-    mutationFn: searchByFace,
+    mutationFn: (file: File) => searchByFace(file, 0.7, 20),
     onSuccess: (data) => {
-      setSearchResults(data.results ?? []);
+      setFaceResults(data.items ?? []);
+      setTextResults(null);
     },
   });
 
   const textSearchMutation = useMutation({
-    mutationFn: (text: string) => searchByText(text, 50),
+    mutationFn: (text: string) => searchByText(text, 0.7, 50),
     onSuccess: (data) => {
-      setSearchResults(data.results ?? []);
+      setTextResults(data.items ?? []);
+      setFaceResults(null);
     },
   });
 
   useEffect(() => {
-    if (!imageFile || bboxes.length === 0) {
-      setFacePreviews([]);
-      return;
-    }
+    if (!imageFile || faces.length === 0) return;
 
     let cancelled = false;
     const run = async () => {
       const previews: string[] = [];
-      for (const bbox of bboxes) {
-        const blob = await cropToBlob(imageFile, bbox);
+      for (const face of faces) {
+        const blob = await cropToBlob(imageFile, face);
         previews.push(await previewFromBlob(blob));
       }
       if (!cancelled) {
@@ -204,7 +169,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [bboxes, imageFile]);
+  }, [faces, imageFile]);
 
   useEffect(() => {
     return () => {
@@ -216,10 +181,11 @@ export default function Home() {
     setImageFile(file);
     setImageUrl(URL.createObjectURL(file));
     setImageSize(null);
-    setBboxes([]);
+    setFaces([]);
     setFacePreviews([]);
     setSelectedFaceIndex(null);
-    setSearchResults(null);
+    setTextResults(null);
+    setFaceResults(null);
     await detectMutation.mutateAsync(file);
   };
 
@@ -240,10 +206,19 @@ export default function Home() {
     event.preventDefault();
   };
 
+  const goVideo = (videoId: string, time?: number | null) => {
+    const params = new URLSearchParams();
+    if (typeof time === "number") {
+      params.set("t", String(time));
+    }
+    const query = params.toString();
+    router.push(query ? `/videos/${videoId}?${query}` : `/videos/${videoId}`);
+  };
+
   const handleSelectFace = async (index: number) => {
-    if (!imageFile || !bboxes[index]) return;
+    if (!imageFile || !faces[index]) return;
     setSelectedFaceIndex(index);
-    const blob = await cropToBlob(imageFile, bboxes[index]);
+    const blob = await cropToBlob(imageFile, faces[index]);
     const faceFile = new File([blob], "face.jpg", { type: "image/jpeg" });
     await faceSearchMutation.mutateAsync(faceFile);
   };
@@ -253,34 +228,20 @@ export default function Home() {
     await textSearchMutation.mutateAsync(textQuery.trim());
   };
 
-  const handleVideoSearch = () => {
-    const value = videoQueryInput.trim();
-    setVideoPage(1);
-    setVideoQuery(value.length > 0 ? value : null);
-  };
-
   const handleVideoPageChange = (nextPage: number) => {
-    const totalPages = videoListQuery.data?.total_pages ?? 1;
+    const total = videoListQuery.data?.total ?? 0;
+    const totalPages = Math.max(1, Math.ceil(total / videoSize));
     const page = Math.min(Math.max(1, nextPage), totalPages);
     setVideoPage(page);
   };
 
-  const handleResultClick = (result: SearchResult) => {
-    const time = getResultTime(result);
-    const params = new URLSearchParams();
-    params.set("catalog", String(result.catalog_image_id));
-    if (time !== null) {
-      params.set("t", String(time));
-    }
-    router.push(`/videos/${result.video_id}?${params.toString()}`);
+  const renderVideoMeta = (videoId: string, fallback?: VideoItem | VideoSummary) => {
+    const video = videoMap.get(videoId) ?? fallback;
+    if (!video) return `영상 #${videoId}`;
+    return `${video.original_filename} · ${formatDuration(video.duration_seconds)}`;
   };
 
-  const renderVideoMeta = (video?: VideoOut) => {
-    if (!video) return "영상 정보를 찾을 수 없습니다.";
-    const resolution =
-      video.width && video.height ? `${video.width}x${video.height}` : "—";
-    return `${video.filename} · ${formatDuration(video.duration)} · ${resolution}`;
-  };
+  const totalPages = Math.max(1, Math.ceil((videoListQuery.data?.total ?? 0) / videoSize));
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f8fafc,_#e2e8f0_55%,_#cbd5f5)] px-6 pb-20 pt-10 text-slate-900">
@@ -288,15 +249,12 @@ export default function Home() {
         <header className="flex flex-col gap-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
-                VLM EXAM
-              </p>
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-500">VLM EXAM</p>
               <h1 className="text-3xl font-semibold tracking-tight text-slate-900">
                 영상 카탈로깅 검색
               </h1>
               <p className="mt-2 max-w-2xl text-sm text-slate-600">
-                얼굴/자연어 검색으로 카탈로깅 이미지를 찾고, 바로 영상 위치로
-                이동하세요.
+                얼굴/자연어 검색 결과를 영상 구간 단위로 확인하고 바로 재생 위치로 이동하세요.
               </p>
             </div>
             <button
@@ -306,17 +264,6 @@ export default function Home() {
             >
               영상 업로드
             </button>
-          </div>
-          <div className="flex flex-wrap gap-3 text-xs text-slate-500">
-            <span className="rounded-full bg-white/70 px-3 py-1 shadow-sm">
-              React Query + Tailwind
-            </span>
-            <span className="rounded-full bg-white/70 px-3 py-1 shadow-sm">
-              Image + Text Search
-            </span>
-            <span className="rounded-full bg-white/70 px-3 py-1 shadow-sm">
-              Deep-link Playback
-            </span>
           </div>
         </header>
 
@@ -332,7 +279,7 @@ export default function Home() {
                     : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                 }`}
               >
-                이미지 검색
+                얼굴 이미지 검색
               </button>
               <button
                 type="button"
@@ -369,7 +316,7 @@ export default function Home() {
                     이미지를 드래그 앤 드롭하거나 파일을 선택하세요.
                   </p>
                   <p className="mt-2 text-xs text-slate-500">
-                    얼굴 좌표를 받아 박스를 표시하고, 얼굴을 선택하면 검색합니다.
+                    얼굴 박스를 선택하면 유사 얼굴이 포함된 영상 구간을 검색합니다.
                   </p>
                   <label className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white">
                     파일 선택
@@ -381,9 +328,7 @@ export default function Home() {
                     />
                   </label>
                   {detectMutation.isPending && (
-                    <p className="mt-3 text-xs text-slate-500">
-                      얼굴 좌표 분석 중...
-                    </p>
+                    <p className="mt-3 text-xs text-slate-500">얼굴 좌표 분석 중...</p>
                   )}
                 </div>
 
@@ -406,18 +351,15 @@ export default function Home() {
                         }}
                       />
                       {imageSize &&
-                        bboxes.map((bbox, index) => {
-                          const [x1, y1, x2, y2] = bbox;
-                          const left = (x1 / imageSize.width) * 100;
-                          const top = (y1 / imageSize.height) * 100;
-                          const width =
-                            ((x2 - x1) / imageSize.width) * 100;
-                          const height =
-                            ((y2 - y1) / imageSize.height) * 100;
+                        faces.map((face, index) => {
+                          const left = (face.x1 / imageSize.width) * 100;
+                          const top = (face.y1 / imageSize.height) * 100;
+                          const width = ((face.x2 - face.x1) / imageSize.width) * 100;
+                          const height = ((face.y2 - face.y1) / imageSize.height) * 100;
                           const isSelected = index === selectedFaceIndex;
                           return (
                             <button
-                              key={`${x1}-${y1}-${index}`}
+                              key={`${face.x1}-${face.y1}-${index}`}
                               type="button"
                               onClick={() => void handleSelectFace(index)}
                               className={`absolute border-2 transition ${
@@ -437,14 +379,10 @@ export default function Home() {
                     </div>
 
                     <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <h3 className="text-sm font-semibold text-slate-800">
-                        얼굴 목록
-                      </h3>
+                      <h3 className="text-sm font-semibold text-slate-800">얼굴 목록</h3>
                       <div className="mt-4 grid gap-3">
                         {facePreviews.length === 0 && (
-                          <p className="text-xs text-slate-500">
-                            얼굴을 인식하면 목록이 표시됩니다.
-                          </p>
+                          <p className="text-xs text-slate-500">얼굴을 인식하면 목록이 표시됩니다.</p>
                         )}
                         {facePreviews.map((preview, index) => (
                           <button
@@ -466,12 +404,8 @@ export default function Home() {
                               className="h-12 w-12 rounded-lg object-cover"
                             />
                             <div>
-                              <p className="font-semibold text-slate-700">
-                                얼굴 {index + 1}
-                              </p>
-                              <p className="text-[11px] text-slate-500">
-                                선택하여 검색
-                              </p>
+                              <p className="font-semibold text-slate-700">얼굴 {index + 1}</p>
+                              <p className="text-[11px] text-slate-500">선택하여 검색</p>
                             </div>
                           </button>
                         ))}
@@ -482,9 +416,7 @@ export default function Home() {
               </div>
             ) : activeTab === "text" ? (
               <div className="mt-6 grid gap-4">
-                <label className="text-xs font-semibold text-slate-600">
-                  자연어 입력
-                </label>
+                <label className="text-xs font-semibold text-slate-600">자연어 입력</label>
                 <div className="flex flex-wrap gap-3">
                   <input
                     value={textQuery}
@@ -507,20 +439,6 @@ export default function Home() {
             ) : (
               <div className="mt-6 grid gap-4">
                 <div className="flex flex-wrap items-end gap-3">
-                  <label className="flex min-w-[240px] flex-1 flex-col gap-2 text-xs font-semibold text-slate-600">
-                    영상 검색어
-                    <input
-                      value={videoQueryInput}
-                      onChange={(event) => setVideoQueryInput(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          handleVideoSearch();
-                        }
-                      }}
-                      placeholder="파일명 검색"
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-400"
-                    />
-                  </label>
                   <label className="flex flex-col gap-2 text-xs font-semibold text-slate-600">
                     페이지 크기
                     <select
@@ -537,81 +455,36 @@ export default function Home() {
                       <option value={100}>100</option>
                     </select>
                   </label>
-                  <button
-                    type="button"
-                    onClick={handleVideoSearch}
-                    className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white"
-                  >
-                    조회
-                  </button>
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-white p-5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="text-sm font-semibold text-slate-800">
-                      영상 목록
-                    </h3>
+                    <h3 className="text-sm font-semibold text-slate-800">영상 목록</h3>
                     <p className="text-xs text-slate-500">
-                      총 {videoListQuery.data?.total ?? 0}건 · {videoPage}/
-                      {videoListQuery.data?.total_pages ?? 1} 페이지
+                      총 {videoListQuery.data?.total ?? 0}건 · {videoPage}/{totalPages} 페이지
                     </p>
                   </div>
 
                   <div className="mt-4 grid gap-3">
                     {videoListQuery.isPending && (
-                      <p className="text-xs text-slate-500">
-                        영상 목록을 불러오는 중...
-                      </p>
+                      <p className="text-xs text-slate-500">영상 목록을 불러오는 중...</p>
                     )}
-                    {!videoListQuery.isPending &&
-                      (videoListQuery.data?.videos.length ?? 0) === 0 && (
-                        <p className="text-xs text-slate-500">
-                          조회된 영상이 없습니다.
-                        </p>
-                      )}
-                    {videoListQuery.data?.videos.map((video) => (
+                    {!videoListQuery.isPending && (videoListQuery.data?.items.length ?? 0) === 0 && (
+                      <p className="text-xs text-slate-500">조회된 영상이 없습니다.</p>
+                    )}
+                    {videoListQuery.data?.items.map((video) => (
                       <button
                         key={video.id}
                         type="button"
-                        onClick={() => router.push(`/videos/${video.id}`)}
-                        className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white lg:grid-cols-[200px_1fr]"
+                        onClick={() => goVideo(video.id)}
+                        className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
                       >
-                        <div className="relative h-28 overflow-hidden rounded-xl bg-slate-200">
-                          {getVideoCatalogImageId(video) !== null ? (
-                            <Image
-                              src={getThumbnailUrl(getVideoCatalogImageId(video)!)}
-                              alt={`${video.filename} thumbnail`}
-                              fill
-                              unoptimized
-                              className="object-cover"
-                            />
-                          ) : (
-                            <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                              썸네일 없음
-                            </div>
-                          )}
-                        </div>
-
                         <div className="min-w-0 grid gap-2 text-xs text-slate-700 md:grid-cols-2">
                           <p className="truncate text-sm font-semibold text-slate-800">
-                            {video.filename}
+                            {video.original_filename}
                           </p>
                           <p>상태: {video.status}</p>
-                          <p>영상 포맷: {formatContentType(video.content_type)}</p>
-                          <p>영상 길이: {formatDuration(video.duration)}</p>
-                          <p>
-                            작업 소요시간:{" "}
-                            {formatProcessingDuration(
-                              video.processing_started_at,
-                              video.processing_finished_at
-                            )}
-                          </p>
-                          <p>
-                            해상도:{" "}
-                            {video.width && video.height
-                              ? `${video.width}x${video.height}`
-                              : "—"}
-                          </p>
+                          <p>영상 길이: {formatDuration(video.duration_seconds)}</p>
                           <p>등록일: {formatDateTime(video.created_at)}</p>
                         </div>
                       </button>
@@ -630,7 +503,7 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={() => handleVideoPageChange(videoPage + 1)}
-                      disabled={videoPage >= (videoListQuery.data?.total_pages ?? 1)}
+                      disabled={videoPage >= totalPages}
                       className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       다음
@@ -643,60 +516,58 @@ export default function Home() {
             {activeTab !== "videos" && (
               <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-slate-800">
-                    검색 결과
-                  </h3>
+                  <h3 className="text-sm font-semibold text-slate-800">검색 결과</h3>
                   <p className="text-xs text-slate-500">
-                    {searchResults ? searchResults.length : 0}건
+                    {activeTab === "text" ? textResults?.length ?? 0 : faceResults?.length ?? 0}건
                   </p>
                 </div>
+
                 <div className="mt-4 grid gap-4">
-                  {!searchResults && (
-                    <p className="text-xs text-slate-500">
-                      검색을 수행하면 결과가 여기에 표시됩니다.
-                    </p>
+                  {activeTab === "text" && !textResults && (
+                    <p className="text-xs text-slate-500">검색을 수행하면 결과가 여기에 표시됩니다.</p>
                   )}
-                  {searchResults?.map((result) => {
-                    const video = videoMap.get(result.video_id);
-                    return (
+
+                  {activeTab === "text" &&
+                    textResults?.map((item, index) => (
                       <button
-                        key={`${result.video_id}-${result.catalog_image_id}`}
+                        key={`text-${item.video_id}-${index}`}
                         type="button"
-                        onClick={() => handleResultClick(result)}
-                        className="flex flex-wrap gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
+                        onClick={() => goVideo(item.video_id, item.start_sec)}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
                       >
-                        <div className="relative h-24 w-40 overflow-hidden rounded-xl bg-slate-200">
-                          <Image
-                            src={getThumbnailUrl(result.catalog_image_id)}
-                            alt="thumbnail"
-                            fill
-                            unoptimized
-                            className="object-cover"
-                          />
-                        </div>
-                        <div className="flex-1 text-xs text-slate-600">
-                          <p className="text-sm font-semibold text-slate-800">
-                            {renderVideoMeta(video)}
-                          </p>
-                          <p className="mt-1">
-                            재생 위치:{" "}
-                            {getResultTime(result) !== null
-                              ? `${getResultTime(result)}s`
-                              : "정보 없음"}
-                          </p>
-                          <p className="mt-1">
-                            설명: {result.caption_en ?? "설명 없음"}
-                          </p>
-                          <p className="mt-1">점수: {result.score.toFixed(3)}</p>
-                        </div>
+                        <p className="text-sm font-semibold text-slate-800">
+                          {renderVideoMeta(item.video_id, item.video)}
+                        </p>
+                        <p className="mt-2 text-xs text-slate-700">구간: {formatRange(item.start_sec, item.end_sec)}</p>
+                        <p className="mt-1 text-xs text-slate-700">텍스트: {item.text}</p>
+                        <p className="mt-1 text-xs text-slate-500">유사도: {item.similarity.toFixed(3)}</p>
                       </button>
-                    );
-                  })}
+                    ))}
+
+                  {activeTab === "image" && !faceResults && (
+                    <p className="text-xs text-slate-500">검색을 수행하면 결과가 여기에 표시됩니다.</p>
+                  )}
+
+                  {activeTab === "image" &&
+                    faceResults?.map((item, index) => (
+                      <button
+                        key={`face-${item.video_id}-${index}`}
+                        type="button"
+                        onClick={() => goVideo(item.video_id, item.start_sec)}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
+                      >
+                        <p className="text-sm font-semibold text-slate-800">
+                          {renderVideoMeta(item.video_id, item.video)}
+                        </p>
+                        <p className="mt-2 text-xs text-slate-700">구간: {formatRange(item.start_sec, item.end_sec)}</p>
+                        <p className="mt-1 text-xs text-slate-700">별칭: {item.alias || "-"}</p>
+                        <p className="mt-1 text-xs text-slate-500">유사도: {item.similarity.toFixed(3)}</p>
+                      </button>
+                    ))}
                 </div>
               </div>
             )}
           </div>
-
         </section>
       </div>
 
@@ -704,9 +575,7 @@ export default function Home() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-6">
           <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-800">
-                영상 업로드
-              </h3>
+              <h3 className="text-lg font-semibold text-slate-800">영상 업로드</h3>
               <button
                 type="button"
                 onClick={() => setIsUploadOpen(false)}
@@ -715,13 +584,9 @@ export default function Home() {
                 닫기
               </button>
             </div>
-            <p className="mt-2 text-xs text-slate-500">
-              영상을 선택하면 시스템에 등록됩니다.
-            </p>
+            <p className="mt-2 text-xs text-slate-500">영상을 선택하면 시스템에 등록됩니다.</p>
             <label className="mt-5 flex cursor-pointer flex-col items-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-xs text-slate-600">
-              <span className="font-semibold text-slate-700">
-                파일을 선택하세요.
-              </span>
+              <span className="font-semibold text-slate-700">파일을 선택하세요.</span>
               <input
                 type="file"
                 accept="video/*"
@@ -733,9 +598,7 @@ export default function Home() {
                 }}
               />
             </label>
-            {uploadMutation.isPending && (
-              <p className="mt-3 text-xs text-slate-500">업로드 중...</p>
-            )}
+            {uploadMutation.isPending && <p className="mt-3 text-xs text-slate-500">업로드 중...</p>}
           </div>
         </div>
       )}

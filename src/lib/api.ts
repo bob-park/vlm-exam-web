@@ -4,8 +4,8 @@ import {
   FaceSearchResponse,
   TextSearchRequest,
   TextSearchResponse,
-  VideoOut,
-  VideoSearchResponse,
+  VideoIngestResponse,
+  VideoListResponse,
 } from "./types";
 
 const api = ky.create({
@@ -14,21 +14,12 @@ const api = ky.create({
   timeout: 30 * 60 * 1000,
 });
 
-export function getStreamUrl(videoId: number) {
+export function getStreamUrl(videoId: string) {
   return `/api/videos/${videoId}/stream`;
 }
 
-export function getThumbnailUrl(catalogId: number) {
-  return `/api/catalogs/${catalogId}/thumbnail`;
-}
-
-export async function listVideos(
-  query?: string | null,
-  page?: number,
-  size?: number
-) {
+export async function listVideos(page?: number, size?: number) {
   const searchParams: Record<string, string> = {};
-  if (query) searchParams.query = query;
   if (typeof page === "number") searchParams.page = String(page);
   if (typeof size === "number") searchParams.size = String(size);
 
@@ -37,60 +28,48 @@ export async function listVideos(
       searchParams: Object.keys(searchParams).length > 0 ? searchParams : undefined,
       cache: "no-store",
     })
-    .json<VideoSearchResponse>();
+    .json<VideoListResponse>();
 }
 
 export async function uploadVideo(file: File) {
   const form = new FormData();
   form.append("file", file);
-  console.log("[uploadVideo] start", {
-    name: file.name,
-    type: file.type,
-    size: file.size,
-  });
-  try {
-    const response = await api.post("videos/upload", {
-      body: form,
-    });
-    console.log("[uploadVideo] response", {
-      status: response.status,
-      ok: response.ok,
-    });
-    return response.json<VideoOut>();
-  } catch (error) {
-    console.error("[uploadVideo] error", error);
-    throw error;
-  }
+  return api.post("videos/ingest", { body: form }).json<VideoIngestResponse>();
 }
 
 export async function detectFaces(file: File) {
   const form = new FormData();
   form.append("file", file);
   return api
-    .post("faces/detect", {
+    .post("face/detect", {
       body: form,
     })
     .json<FaceDetectResponse>();
 }
 
-export async function searchByFace(file: File) {
+export async function searchByFace(file: File, threshold = 0.7, limit = 20) {
   const form = new FormData();
   form.append("file", file);
   return api
-    .post("search/face", {
+    .post("videos/faces", {
       body: form,
+      searchParams: {
+        threshold: String(threshold),
+        limit: String(limit),
+      },
     })
     .json<FaceSearchResponse>();
 }
 
-export async function searchByText(text: string, topK?: number | null) {
+export async function searchByText(query: string, threshold = 0.7, limit = 20) {
   const payload: TextSearchRequest = {
-    text,
-    top_k: topK ?? null,
+    query,
+    threshold,
+    limit,
   };
 
   return api
-    .post("search/text", {
+    .post("videos/texts", {
       json: payload,
     })
     .json<TextSearchResponse>();

@@ -1,48 +1,74 @@
-export type VideoOut = {
-  id: number;
-  filename: string;
-  content_type: string | null;
-  duration: number | null;
-  width: number | null;
-  height: number | null;
+export type VideoSummary = {
+  id: string;
+  original_filename: string;
+  duration_seconds: number | null;
   status: string;
-  error_message: string | null;
+  created_at: string;
+};
+
+export type VideoItem = {
+  id: string;
+  original_filename: string;
+  duration_seconds: number | null;
+  status: string;
   processing_started_at: string | null;
   processing_finished_at: string | null;
   created_at: string;
-  first_catalog_image_id?: number | null;
-  catalog_image_id?: number | null;
 };
 
-export type VideoSearchResponse = {
-  videos: VideoOut[];
-  total: number;
+export type VideoListResponse = {
   page: number;
   size: number;
-  total_pages: number;
+  total: number;
+  items: VideoItem[];
 };
 
-export type SearchResult = {
-  catalog_image_id: number;
-  video_id: number;
-  caption_en: string | null;
-  score: number;
-  seconds?: number | null;
+export type VideoIngestResponse = {
+  id: string;
+  original_filename: string;
+  status: string;
+  created_at: string;
 };
 
-export type TextSearchRequest = {
-  text: string;
-  top_k?: number | null;
-};
-
-export type TextSearchResponse = {
-  results: SearchResult[];
-};
-
-export type FaceSearchResponse = {
-  results: SearchResult[];
+export type FaceBox = {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
 };
 
 export type FaceDetectResponse = {
-  bboxes: number[][];
+  faces: FaceBox[];
+};
+
+export type TextSearchRequest = {
+  query: string;
+  threshold?: number;
+  limit?: number;
+};
+
+export type TextSearchItem = {
+  video_id: string;
+  video: VideoSummary;
+  start_sec: number;
+  end_sec: number;
+  text: string;
+  similarity: number;
+};
+
+export type TextSearchResponse = {
+  items: TextSearchItem[];
+};
+
+export type FaceSearchItem = {
+  video_id: string;
+  video: VideoSummary;
+  alias: string;
+  start_sec: number;
+  end_sec: number;
+  similarity: number;
+};
+
+export type FaceSearchResponse = {
+  items: FaceSearchItem[];
 };
