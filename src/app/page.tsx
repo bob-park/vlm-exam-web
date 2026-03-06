@@ -1,8 +1,16 @@
 "use client";
 
-import { detectFaces, listVideos, searchByFace, searchByText, uploadVideo } from "@/lib/api";
 import {
-  FaceBox,
+  detectFaces,
+  listCatalogImages,
+  listVideos,
+  searchByFace,
+  searchByText,
+  uploadVideo,
+} from "@/lib/api";
+import {
+  CatalogImageItem,
+  FaceDetectItem,
   FaceSearchItem,
   TextSearchItem,
   VideoItem,
@@ -11,7 +19,7 @@ import {
 import { useMutation, useQuery } from "@tanstack/react-query";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type ImageSize = { width: number; height: number };
 
@@ -29,11 +37,48 @@ function formatDateTime(value: string | null | undefined) {
   return date.toLocaleString("ko-KR");
 }
 
+function formatElapsed(start: string | null | undefined, end: string | null | undefined) {
+  if (!start || !end) return "-";
+  const startTime = new Date(start).getTime();
+  const endTime = new Date(end).getTime();
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime < startTime) return "-";
+  const totalSeconds = Math.floor((endTime - startTime) / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  }
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
 function formatRange(startSeconds: number, endSeconds: number) {
   return `${startSeconds.toFixed(1)}s ~ ${endSeconds.toFixed(1)}s`;
 }
 
-async function cropToBlob(file: File, face: FaceBox) {
+function pickCatalogImage(
+  images: CatalogImageItem[] | undefined,
+  startSeconds: number,
+  endSeconds: number,
+) {
+  if (!images || images.length === 0) return null;
+  const inRange = images.filter(
+    (image) => image.timestamp_sec >= startSeconds && image.timestamp_sec <= endSeconds,
+  );
+  const pickClosest = (items: CatalogImageItem[]) =>
+    items.reduce((best, current) => {
+      const bestDiff = Math.abs(best.timestamp_sec - startSeconds);
+      const currentDiff = Math.abs(current.timestamp_sec - startSeconds);
+      return currentDiff < bestDiff ? current : best;
+    });
+
+  if (inRange.length > 0) {
+    return pickClosest(inRange);
+  }
+  return pickClosest(images);
+}
+
+async function cropToBlob(file: File, face: { x1: number; y1: number; x2: number; y2: number }) {
   const image = await createImageBitmap(file);
   const { x1, y1, x2, y2 } = face;
   const scale = 2.0;
@@ -89,12 +134,14 @@ export default function Home() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageSize, setImageSize] = useState<ImageSize | null>(null);
-  const [faces, setFaces] = useState<FaceBox[]>([]);
+  const [faces, setFaces] = useState<FaceDetectItem[]>([]);
   const [facePreviews, setFacePreviews] = useState<string[]>([]);
   const [selectedFaceIndex, setSelectedFaceIndex] = useState<number | null>(null);
 
   const [textResults, setTextResults] = useState<TextSearchItem[] | null>(null);
   const [faceResults, setFaceResults] = useState<FaceSearchItem[] | null>(null);
+  const [catalogImages, setCatalogImages] = useState<Record<string, CatalogImageItem[]>>({});
+  const catalogFetchedRef = useRef<Set<string>>(new Set());
 
   const videosQuery = useQuery({
     queryKey: ["videos"],
@@ -136,7 +183,7 @@ export default function Home() {
   });
 
   const faceSearchMutation = useMutation({
-    mutationFn: (file: File) => searchByFace(file, 0.7, 20),
+    mutationFn: (file: File) => searchByFace(file, 0.3, 20),
     onSuccess: (data) => {
       setFaceResults(data.items ?? []);
       setTextResults(null);
@@ -144,7 +191,7 @@ export default function Home() {
   });
 
   const textSearchMutation = useMutation({
-    mutationFn: (text: string) => searchByText(text, 0.7, 50),
+    mutationFn: (text: string) => searchByText(text, 0.3, 50),
     onSuccess: (data) => {
       setTextResults(data.items ?? []);
       setFaceResults(null);
@@ -158,7 +205,7 @@ export default function Home() {
     const run = async () => {
       const previews: string[] = [];
       for (const face of faces) {
-        const blob = await cropToBlob(imageFile, face);
+        const blob = await cropToBlob(imageFile, face.box);
         previews.push(await previewFromBlob(blob));
       }
       if (!cancelled) {
@@ -176,6 +223,31 @@ export default function Home() {
       if (imageUrl) URL.revokeObjectURL(imageUrl);
     };
   }, [imageUrl]);
+
+  useEffect(() => {
+    const ids = new Set<string>();
+    for (const item of textResults ?? []) ids.add(item.video_id);
+    for (const item of faceResults ?? []) ids.add(item.video_id);
+    if (ids.size === 0) return;
+
+    ids.forEach((videoId) => {
+      if (catalogFetchedRef.current.has(videoId)) return;
+      catalogFetchedRef.current.add(videoId);
+      void listCatalogImages(videoId, 1, 200)
+        .then((data) => {
+          setCatalogImages((prev) => ({
+            ...prev,
+            [videoId]: data.items ?? [],
+          }));
+        })
+        .catch(() => {
+          setCatalogImages((prev) => ({
+            ...prev,
+            [videoId]: [],
+          }));
+        });
+    });
+  }, [textResults, faceResults]);
 
   const handleImageFile = async (file: File) => {
     setImageFile(file);
@@ -218,7 +290,7 @@ export default function Home() {
   const handleSelectFace = async (index: number) => {
     if (!imageFile || !faces[index]) return;
     setSelectedFaceIndex(index);
-    const blob = await cropToBlob(imageFile, faces[index]);
+    const blob = await cropToBlob(imageFile, faces[index].box);
     const faceFile = new File([blob], "face.jpg", { type: "image/jpeg" });
     await faceSearchMutation.mutateAsync(faceFile);
   };
@@ -352,14 +424,14 @@ export default function Home() {
                       />
                       {imageSize &&
                         faces.map((face, index) => {
-                          const left = (face.x1 / imageSize.width) * 100;
-                          const top = (face.y1 / imageSize.height) * 100;
-                          const width = ((face.x2 - face.x1) / imageSize.width) * 100;
-                          const height = ((face.y2 - face.y1) / imageSize.height) * 100;
+                          const left = (face.box.x1 / imageSize.width) * 100;
+                          const top = (face.box.y1 / imageSize.height) * 100;
+                          const width = ((face.box.x2 - face.box.x1) / imageSize.width) * 100;
+                          const height = ((face.box.y2 - face.box.y1) / imageSize.height) * 100;
                           const isSelected = index === selectedFaceIndex;
                           return (
                             <button
-                              key={`${face.x1}-${face.y1}-${index}`}
+                              key={`${face.box.x1}-${face.box.y1}-${index}`}
                               type="button"
                               onClick={() => void handleSelectFace(index)}
                               className={`absolute border-2 transition ${
@@ -405,7 +477,14 @@ export default function Home() {
                             />
                             <div>
                               <p className="font-semibold text-slate-700">얼굴 {index + 1}</p>
-                              <p className="text-[11px] text-slate-500">선택하여 검색</p>
+                              {faces[index]?.match ? (
+                                <p className="text-[11px] text-slate-500">
+                                  등록 얼굴: {faces[index].match?.alias} · 유사도{" "}
+                                  {faces[index].match?.similarity.toFixed(3)}
+                                </p>
+                              ) : (
+                                <p className="text-[11px] text-slate-500">등록 얼굴 없음</p>
+                              )}
                             </div>
                           </button>
                         ))}
@@ -486,6 +565,10 @@ export default function Home() {
                           <p>상태: {video.status}</p>
                           <p>영상 길이: {formatDuration(video.duration_seconds)}</p>
                           <p>등록일: {formatDateTime(video.created_at)}</p>
+                          <p>
+                            총 작업 소요시간:{" "}
+                            {formatElapsed(video.processing_started_at, video.processing_finished_at)}
+                          </p>
                         </div>
                       </button>
                     ))}
@@ -528,42 +611,95 @@ export default function Home() {
                   )}
 
                   {activeTab === "text" &&
-                    textResults?.map((item, index) => (
-                      <button
-                        key={`text-${item.video_id}-${index}`}
-                        type="button"
-                        onClick={() => goVideo(item.video_id, item.start_sec)}
-                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
-                      >
-                        <p className="text-sm font-semibold text-slate-800">
-                          {renderVideoMeta(item.video_id, item.video)}
-                        </p>
-                        <p className="mt-2 text-xs text-slate-700">구간: {formatRange(item.start_sec, item.end_sec)}</p>
-                        <p className="mt-1 text-xs text-slate-700">텍스트: {item.text}</p>
-                        <p className="mt-1 text-xs text-slate-500">유사도: {item.similarity.toFixed(3)}</p>
-                      </button>
-                    ))}
+                    textResults?.map((item, index) => {
+                      const catalogImage = pickCatalogImage(
+                        catalogImages[item.video_id],
+                        item.start_sec,
+                        item.end_sec,
+                      );
+                      return (
+                        <button
+                          key={`text-${item.video_id}-${index}`}
+                          type="button"
+                          onClick={() => goVideo(item.video_id, item.start_sec)}
+                          className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white md:grid-cols-[120px_1fr]"
+                        >
+                          <div className="flex h-[90px] w-[120px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white">
+                            {catalogImage ? (
+                              <img
+                                src={catalogImage.image_url}
+                                alt="catalog"
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <span className="text-[11px] text-slate-400">이미지 없음</span>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-slate-800">
+                              {renderVideoMeta(item.video_id, item.video)}
+                            </p>
+                            <p className="mt-2 text-xs text-slate-700">
+                              구간: {formatRange(item.start_sec, item.end_sec)}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-700">
+                              텍스트 세그먼트: {item.text}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              유사도: {item.similarity.toFixed(3)}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
 
                   {activeTab === "image" && !faceResults && (
                     <p className="text-xs text-slate-500">검색을 수행하면 결과가 여기에 표시됩니다.</p>
                   )}
 
                   {activeTab === "image" &&
-                    faceResults?.map((item, index) => (
-                      <button
-                        key={`face-${item.video_id}-${index}`}
-                        type="button"
-                        onClick={() => goVideo(item.video_id, item.start_sec)}
-                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
-                      >
-                        <p className="text-sm font-semibold text-slate-800">
-                          {renderVideoMeta(item.video_id, item.video)}
-                        </p>
-                        <p className="mt-2 text-xs text-slate-700">구간: {formatRange(item.start_sec, item.end_sec)}</p>
-                        <p className="mt-1 text-xs text-slate-700">별칭: {item.alias || "-"}</p>
-                        <p className="mt-1 text-xs text-slate-500">유사도: {item.similarity.toFixed(3)}</p>
-                      </button>
-                    ))}
+                    faceResults?.map((item, index) => {
+                      const catalogImage = pickCatalogImage(
+                        catalogImages[item.video_id],
+                        item.start_sec,
+                        item.end_sec,
+                      );
+                      return (
+                        <button
+                          key={`face-${item.video_id}-${index}`}
+                          type="button"
+                          onClick={() => goVideo(item.video_id, item.start_sec)}
+                          className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white md:grid-cols-[120px_1fr]"
+                        >
+                          <div className="flex h-[90px] w-[120px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white">
+                            {catalogImage ? (
+                              <img
+                                src={catalogImage.image_url}
+                                alt="catalog"
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <span className="text-[11px] text-slate-400">이미지 없음</span>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-slate-800">
+                              {renderVideoMeta(item.video_id, item.video)}
+                            </p>
+                            <p className="mt-2 text-xs text-slate-700">
+                              구간: {formatRange(item.start_sec, item.end_sec)}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-700">별칭: {item.alias || "-"}</p>
+                            <p className="mt-1 text-xs text-slate-700">
+                              텍스트 세그먼트: -
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              유사도: {item.similarity.toFixed(3)}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
                 </div>
               </div>
             )}

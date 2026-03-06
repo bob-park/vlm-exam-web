@@ -1,9 +1,13 @@
 import ky from "ky";
 import {
+  CatalogImageListResponse,
   FaceDetectResponse,
   FaceSearchResponse,
+  FaceTrackItem,
+  FaceTrackUpdateRequest,
   TextSearchRequest,
   TextSearchResponse,
+  VideoDetailResponse,
   VideoIngestResponse,
   VideoListResponse,
 } from "./types";
@@ -31,6 +35,21 @@ export async function listVideos(page?: number, size?: number) {
     .json<VideoListResponse>();
 }
 
+export async function getVideoDetail(videoId: string) {
+  return api.get(`videos/${videoId}`, { cache: "no-store" }).json<VideoDetailResponse>();
+}
+
+export async function updateFaceTrackAlias(
+  videoId: string,
+  faceTrackId: number,
+  alias: string,
+) {
+  const payload: FaceTrackUpdateRequest = { alias };
+  return api
+    .patch(`videos/${videoId}/faces/${faceTrackId}`, { json: payload })
+    .json<FaceTrackItem>();
+}
+
 export async function uploadVideo(file: File) {
   const form = new FormData();
   form.append("file", file);
@@ -47,7 +66,7 @@ export async function detectFaces(file: File) {
     .json<FaceDetectResponse>();
 }
 
-export async function searchByFace(file: File, threshold = 0.7, limit = 20) {
+export async function searchByFace(file: File, threshold = 0.3, limit = 20) {
   const form = new FormData();
   form.append("file", file);
   return api
@@ -73,4 +92,17 @@ export async function searchByText(query: string, threshold = 0.7, limit = 20) {
       json: payload,
     })
     .json<TextSearchResponse>();
+}
+
+export async function listCatalogImages(videoId: string, page?: number, size?: number) {
+  const searchParams: Record<string, string> = {};
+  if (typeof page === "number") searchParams.page = String(page);
+  if (typeof size === "number") searchParams.size = String(size);
+
+  return api
+    .get(`videos/${videoId}/catalog-images`, {
+      searchParams: Object.keys(searchParams).length > 0 ? searchParams : undefined,
+      cache: "no-store",
+    })
+    .json<CatalogImageListResponse>();
 }
