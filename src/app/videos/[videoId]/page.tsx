@@ -213,7 +213,7 @@ export default function VideoDetailPage() {
           <video
             ref={videoRef}
             controls
-            src={streamUrl}
+            src={`/api/videos/${videoId}/stream`}
             className="h-[100lvh] w-full rounded-2xl bg-black"
           />
           {initialTime !== null && (
