@@ -56,6 +56,19 @@ function formatRange(startSeconds: number, endSeconds: number) {
   return `${startSeconds.toFixed(1)}s ~ ${endSeconds.toFixed(1)}s`;
 }
 
+function stripOrigin(url: string) {
+  if (!url) return url;
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    try {
+      const parsed = new URL(url);
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    } catch {
+      return url;
+    }
+  }
+  return url;
+}
+
 function pickCatalogImage(
   images: CatalogImageItem[] | undefined,
   startSeconds: number,
@@ -627,7 +640,7 @@ export default function Home() {
                           <div className="flex h-[90px] w-[120px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white">
                             {catalogImage ? (
                               <img
-                                src={catalogImage.image_url}
+                                src={`/api`+  stripOrigin(catalogImage.image_url)}
                                 alt="catalog"
                                 className="h-full w-full object-cover"
                               />
@@ -674,7 +687,7 @@ export default function Home() {
                           <div className="flex h-[90px] w-[120px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white">
                             {catalogImage ? (
                               <img
-                                src={catalogImage.image_url}
+                                src={`/api`+ stripOrigin(catalogImage.image_url)}
                                 alt="catalog"
                                 className="h-full w-full object-cover"
                               />

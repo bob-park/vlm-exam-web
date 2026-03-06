@@ -24,6 +24,15 @@ function formatRange(startSeconds: number, endSeconds: number) {
   return `${startSeconds.toFixed(1)}s ~ ${endSeconds.toFixed(1)}s`;
 }
 
+function toPathOnly(urlOrPath: string) {
+  try {
+    const parsed = new URL(urlOrPath);
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return urlOrPath;
+  }
+}
+
 export default function VideoDetailPage() {
   const params = useParams<{ videoId: string }>();
   const searchParams = useSearchParams();
@@ -109,7 +118,7 @@ export default function VideoDetailPage() {
           className="flex h-[90px] w-[120px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white"
         >
           {track.image_url ? (
-            <img src={track.image_url} alt="face-track" className="h-full w-full object-cover" />
+            <img src={'/api' + toPathOnly(track.image_url)} alt="face-track" className="h-full w-full object-cover" />
           ) : (
             <span className="text-[11px] text-slate-400">이미지 없음</span>
           )}
@@ -176,7 +185,7 @@ export default function VideoDetailPage() {
       >
         <div className="flex h-[90px] w-[120px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white">
           {segment.image_url ? (
-            <img src={segment.image_url} alt="text-segment" className="h-full w-full object-cover" />
+            <img src={'/api' + toPathOnly(segment.image_url)} alt="text-segment" className="h-full w-full object-cover" />
           ) : (
             <span className="text-[11px] text-slate-400">이미지 없음</span>
           )}
