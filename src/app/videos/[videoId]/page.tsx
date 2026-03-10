@@ -50,6 +50,7 @@ export default function VideoDetailPage() {
   const [faceTracks, setFaceTracks] = useState<FaceTrackItem[]>([]);
   const [editingTrackId, setEditingTrackId] = useState<number | null>(null);
   const [aliasDrafts, setAliasDrafts] = useState<Record<number, string>>({});
+  const [videoSize, setVideoSize] = useState<{ width: number; height: number } | null>(null);
 
   useEffect(() => {
     if (!detailQuery.data) return;
@@ -110,15 +111,19 @@ export default function VideoDetailPage() {
     return (
       <div
         key={`face-track-${track.id}`}
-        className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left md:grid-cols-[120px_1fr]"
+        className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left md:grid-cols-[auto_1fr]"
       >
         <button
           type="button"
           onClick={() => handleSeek(track.start_sec)}
-          className="flex h-[90px] w-[120px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white"
+          className="flex h-[90px] w-auto items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white"
         >
-          {track.image_url ? (
-            <img src={'/api' + toPathOnly(track.image_url)} alt="face-track" className="h-full w-full object-cover" />
+          {track.face_id ? (
+            <img
+              src={`/api/face/${track.face_id}/image`}
+              alt="face-track"
+              className="h-full w-auto max-w-full object-contain"
+            />
           ) : (
             <span className="text-[11px] text-slate-400">이미지 없음</span>
           )}
@@ -223,7 +228,17 @@ export default function VideoDetailPage() {
             ref={videoRef}
             controls
             src={`/api/videos/${videoId}/stream`}
-            className="h-[100lvh] w-full rounded-2xl bg-black"
+            onLoadedMetadata={(event) => {
+              const element = event.currentTarget;
+              setVideoSize({ width: element.videoWidth, height: element.videoHeight });
+            }}
+            style={{
+              width: videoSize?.width ?? "100%",
+              height: videoSize?.height ?? "auto",
+              maxWidth: "100%",
+              maxHeight: "100svh",
+            }}
+            className="mx-auto rounded-2xl bg-black"
           />
           {initialTime !== null && (
             <p className="mt-3 text-xs text-slate-500">요청한 위치에서 재생합니다: {initialTime}s</p>
